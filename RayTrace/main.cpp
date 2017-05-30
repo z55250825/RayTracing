@@ -11,8 +11,27 @@
 
 using namespace std;
 
+//PHONG_N：用于镜面反射
 const int PHONG_N=10;
+
+//光线追踪最深深度
 const int maxdepth=8;
+
+//像平面的高和宽（这里是2048*2048)
+const int Len=2048;
+const double LEN=Len;
+const double units=1/LEN;
+
+//光线衰减函数的常数
+const double c1=0.5,c2=0.04,c3=0.0001;
+
+/*
+ *  光线衰减函数，跟距离相关
+ */
+double reduction(double d)
+{
+    return (min(1/(c1+c2*d+c3*d*d),0.95));
+}
 
 inline bool bige(double a,double b){if (a-b>-eps)return true;return false;}
 inline bool Z(double a){if (a>-eps&&a<eps)return true;return false;}
@@ -22,6 +41,9 @@ inline double sqr(double n){return n*n;}
 int max(int a,int b){if (a<b)return b;else return a;}
 double min(double a,double b){if (a<b)return a;else return b;}
 
+/*
+ *  三维向量
+ */
 struct vec
 {
     double x,y,z,len,slen;
@@ -85,15 +107,23 @@ struct vec
     inline vec operator =(const vec &a){x=a.x;y=a.y;z=a.z;len=a.len;slen=a.slen;return *this;}
 };
 
+//ZERO常量
 const vec ZERO(0,0,0,0,0);
 
 typedef vec color;
 
+//环境光常量
 const color Ienvironment(10.0,10.0,10.0);
 //const color Ienvironment(0,0,0);
 
+//调试用，打印出某个vec的坐标
 void printvec(const vec &a,const string &s){cout<<s<<a.x<<" "<<a.y<<" "<<a.z<<endl;}
 
+/*
+ *  Ray:光线类
+ *  st: 光线起点
+ *  dir:光线方向（单位化）
+ */
 struct Ray
 {
     vec st,dir;
@@ -101,12 +131,18 @@ struct Ray
     Ray(const vec&St,const vec&Dir):st(St),dir(unit(Dir)){}
     Ray(const Ray&r):st(r.st),dir(r.dir){}
     void set(const vec&St,const vec&Dir){st=St;dir=Dir;}
+    
+    //求出光线上的某点a的参数坐标t(所有点表示为Q=st+t*dir)
     double getT(const vec &a) const {return (a-st).len;}
 };
 
 /*
  *  refraction:简单的折射
- *  ray:
+ *  ray:入射光线
+ *  dots:入射点
+ *  N:入射处表面的法线（朝入射所在介质）
+ *  n1:入射介质的折射率（空气默认为1.0)
+ *  n2:折射介质的折射率。
  */
 Ray refraction(const vec &ray,const vec &dots,const vec &N,const double n1,const double n2)
 {
@@ -120,6 +156,10 @@ Ray refraction(const vec &ray,const vec &dots,const vec &N,const double n1,const
     return Ray(dots,unit(T));
 }
 
+/*
+ * shape:所有环境中的物品的父类，所有物体都继承该类
+ * （方便实现多态）
+ */
 struct shape
 {
     vec kA;//ambient Reflection Coefficient [0,1]
@@ -133,17 +173,50 @@ struct shape
         kA=A;kD=D;kS=S;kT=T;n=N;
     }
     shape(const shape &a):kA(a.kA),kD(a.kD),kS(a.kS),kT(a.kT),n(a.n){}
+    
+    /*
+     *  反射，所有物体都要实现
+     *  ray: 入射光线
+     *  dot: 入射点
+     *  返回值，反射光线
+     */
     virtual Ray reflection(const Ray &ray,const vec &dot){return Ray();}
-    //Ray refraction(const Ray &ray,const vec &dot){return Ray();}
+    
+    /*
+     *  得到某处的法向量
+     *  dots:物体上的指定位置
+     *  返回值，该点的法向量
+     */
     virtual vec getN(const vec &dots){return vec();}
+    
+    /*
+     * insiderRayTracing:
+     * 内部单独的光线追踪，区别在于没有环境光，加上不需要特地扫描所有物体求交
+     * ray：光线
+     * dep：追踪深度
+     * 返回值：求出来的光线颜色
+     */
     virtual color insideRayTracing(const Ray&ray,int dep){return color();}
+    
+    /*
+     * 判断某条光线是否与该物体相交，如果相交，根据num
+     * num==1,求出最近交点放在dots里
+     * num==2,求出第二近的交点放在dots里，如果只有一个交点，则把那个
+     * 交点放在dots里
+     * 返回值：布尔，如果相交则为true，否则为false
+     */
     virtual bool intersect(const Ray &ray,vec &dots,int num){return false;}
 };
 
+//核心函数
 color RayTracing(const Ray ray,int dep);
 
+/*
+ * 球类
+ */
 struct circle:public shape
 {
+    //center:球心，dim:半径
     vec center;
     double dim;
     circle(){}
@@ -204,6 +277,7 @@ struct circle:public shape
         return Ray(dots,ray.dir+(2.0*(-dot(n,ray.dir)))*n);
     }
     
+    //内部反射，其实好像推了一下发现和外部是一样的
     Ray insideReflection(const Ray &ray,const vec &dots)
     {
         vec n=neg(getN(dots));
@@ -224,8 +298,15 @@ struct circle:public shape
     }
 };
 
+//平面类
 struct plane:public shape
 {
+    //n:法向量，dis:平面上任意一点到原点的向量与
+    //法向量n的点积，实际上就是平面到原点的距离或者
+    //距离的相反数。
+    
+    //平面上所有点到原点的向量与n点积都是固定值dis，用这点
+    //可以判断出某个点是否在平面上
     vec n;
     double dis;
     plane(){}
@@ -255,8 +336,13 @@ struct plane:public shape
     }
 };
 
+/*
+ * 长方形（其实是四边形也可以）
+ */
 struct rectangle
 {
+    //a,b,c,d为逆时针或者顺时针的顶点
+    //n为法向量
     vec a,b,c,d,n;
     double dis;
     rectangle(){}
@@ -273,6 +359,10 @@ struct rectangle
         dis=dot(a,n);
     }
     
+    //判断某个点dots是否在该四边形内部
+    //如果是返回true,否则返回false
+    //点在边ab,bc上也认为是在内部
+    //但点在ad,cd上则不认为在内部
     bool inIt(const vec &dots)
     {
         double ra=0.0;
@@ -298,6 +388,9 @@ struct rectangle
             return false;
     }
     
+    //判断某条光线ray是否和该四边形相交
+    //如果是，将交点存在dots中，返回true
+    //否则返回false
     bool intersect(const Ray &ray,vec &dots)
     {
         double par=dot(ray.dir,n);
@@ -451,8 +544,19 @@ struct cuboid:public shape
     }
 };
 
+//摄影机类
 struct camera
 {
+    /*
+     *  eye:摄影机位置
+     *  forward:摄影机正对方向的向量（单位化，下同）
+     *  right：摄影机的正右端方向的向量
+     *  up:摄影机的正上方方向的向量
+     *  stdUp:初始构造摄影机类时候初步判断摄影机的上下的向量
+     *  （注：right,up都是构造时利用forward和stdUp算出来的）
+     *  fov：视角角度
+     *  scale：面前1单位的屏幕的视角宽或者高
+     */
     vec eye,forward,right,up,stdUp;
     double fov,scale;
     camera(){}
@@ -472,12 +576,10 @@ struct camera
         up=unit(det(right,forward));
         scale=2*tan(fov*PI/360.00);
     }
-    /*Ray generateRay(double x,double y)
-    {
-        vec r=((x-0.50)*scale)*right;
-        vec u=((y-0.50)*scale)*up;
-        return Ray(eye,unit(forward+r+u));
-    }*/
+    
+    /*
+     * 对于像平面（默认(0,0)~(1,1))(x,y)处的像素所产生的光线
+     */
     Ray generateRay(double x,double y)const
     {
         vec r=((x-0.50)*scale)*right;
@@ -486,6 +588,7 @@ struct camera
     }
 }mySpot;
 
+//光源类，pos表示位置，color表示颜色
 struct light
 {
     vec pos,color;
@@ -495,21 +598,21 @@ struct light
 };
 
 light *lightLst[10];
-
 shape *shapeLst[10];
 int shapetot=0,lighttot=0;
 
-const double c1=0.5,c2=0.04,c3=0.0001;
-
-double reduction(double d)
-{
-    return (min(1/(c1+c2*d+c3*d*d),0.95));
-}
-
+/*
+ * 判断某条光线和某个点dots之间是否有其他物体遮挡
+ * ray : 光线
+ * dots: 点
+ * 返回值：判断ray和dots间是否有物体遮挡住，如果是，返回true，
+ * 否则返回false
+ */
 bool RayDirect(const Ray ray,const vec &dots)
 {
     vec dott=ZERO;
     double st=ray.getT(dots);
+    //枚举所有物体，求交点，判断是否在中间
     for (int i=0;i<shapetot;++i)
             if (shapeLst[i]->intersect(ray,dott,2))
             {
@@ -519,6 +622,7 @@ bool RayDirect(const Ray ray,const vec &dots)
     return false;
 }
 
+//光线追踪
 color RayTracing(const Ray ray,int dep)
 {
     if (ray.dir==ZERO)return ZERO;
@@ -527,6 +631,7 @@ color RayTracing(const Ray ray,int dep)
     vec dott;
     double maxt=0.0;
     int maxi=0;
+    //求最近交点
     for (int i=0;i<shapetot;++i)
         if (shapeLst[i]->intersect(ray,dott,1))
         {
@@ -550,6 +655,7 @@ color RayTracing(const Ray ray,int dep)
         }
     if (find)
     {
+        //求环境光影响iL
         vec iL=mul(Ienvironment,shapeLst[maxi]->kA);
         vec N=shapeLst[maxi]->getN(dots);
         vec V=unit(ray.st-dots);
@@ -562,16 +668,19 @@ color RayTracing(const Ray ray,int dep)
                 double d=dist(lightLst[i]->pos,dots);
                 double cosSeta=dot(N,L);
                 vec iD=ZERO;
+                //求漫反射影响iD
                 if (cosSeta>eps)
                     iD=cosSeta*mul(lightLst[i]->color,shapeLst[maxi]->kD);
                 
                 vec H=unit(L+V);
                 vec iS=ZERO;
                 double cosSeta2=dot(N,H);
+                //求镜面反射影响iS
                 if (cosSeta2>eps)
                     iS=pow(cosSeta2,PHONG_N)*mul(lightLst[i]->color,shapeLst[maxi]->kS);
                 iL=iL+reduction(d)*(iS+iD);
             }
+        //求完局部光照影响，继续光线追踪
         if (dep<maxdepth)
         {
             color iR=RayTracing(shapeLst[maxi]->reflection(ray, dots), dep+1);
@@ -589,12 +698,9 @@ color RayTracing(const Ray ray,int dep)
     return ZERO;
 }
 
-const int Len=2048;
-const double LEN=Len;
-const double units=1/LEN;
 vec ans[Len][Len];
-int maxx,maxy,maxz;
 
+//画图
 void Display()
 {
     //设置背景颜色为白色
@@ -618,36 +724,9 @@ void Display()
     glFlush();
 }
 
-void renderDepth(const camera &cam)
-{
-    for (int i=0;i<Len;++i)
-    {
-        double si=1-(double)(i)/LEN;
-        for (int j=0;j<Len;++j)
-        {
-            double sj=(double)(j)/LEN;
-            Ray ray=cam.generateRay(si,sj);
-            vec dots;
-            dots.set(0,0,0);
-            shapeLst[0]->intersect(ray, dots,1);
-            if (dots==ZERO)
-            {
-                ans[i][j]=ZERO;
-            }
-            else
-            {
-                double depth=(dots-cam.eye).len;
-                ans[i][j]=vec(depth,depth,depth);
-                maxx=max(maxx,depth);
-                maxy=maxz=maxx;
-            }
-        }
-    }
-}
-
 int main(int argc, char * argv[])
 {
-    mySpot.set(vec(0,0,25),unit(vec(0,1.0,1.0)),vec(0,1,0),90.0);
+    mySpot.set(vec(25,-13,5),unit(vec(-1.0,1.0,0.0)),vec(0,0,1),90.0);
     circle a(vec(-10,10,0), 10.0, vec(0.05,0.45,0.1), vec(0.01,0.95,0.01),
                                 vec(0.3,0.63,0.3), vec(0.3,0.63,0.3), 1.33);
     circle b(vec(13,10,13),8.0,vec(0.45,0.01,0.01),vec(0.95,0.05,0.05),
@@ -681,7 +760,6 @@ int main(int argc, char * argv[])
     lightLst[lighttot++]=&c;
     lightLst[lighttot++]=&h;
     //lightLst[lighttot++]=&i;
-    maxx=maxy=maxz=0;
     for (int ii=0;ii<Len;++ii)
     {
         double si=(double)(ii)/LEN;
@@ -697,13 +775,6 @@ int main(int argc, char * argv[])
             ans[ii][jj].z=min(ans[ii][jj].z,255.0);
         }
     }
-    /*
-    for (int i=0;i<Len;++i)
-    {
-        for (int j=0;j<Len;++j)
-            cout<<ans[i][j].x<<"."<<ans[i][j].y<<"."<<ans[i][j].z<<" ";
-        cout<<endl;
-    }*/
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGB);
     glutInitWindowPosition(200, 200);
