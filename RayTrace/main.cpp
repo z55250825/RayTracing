@@ -448,7 +448,7 @@ struct cuboid:public shape
         n=Ns;
         vec s=det(a.c-a.b,a.a-a.b);
         if (dot(s,N)>0)r[0].set(a.a,a.b,a.c,a.d);
-                else   r[0].set(a.a,a.d,a.c,a.b);
+        else   r[0].set(a.a,a.d,a.c,a.b);
         vec an=r[0].a;vec bn=r[0].b;
         vec cn=r[0].c;vec dn=r[0].d;
         vec au=an+Nh;vec bu=bn+Nh;
@@ -554,11 +554,11 @@ struct cuboid:public shape
                 double t=ray.getT(dott);
                 //cout<<"t "<<t<<endl;
                 if (t<eps)continue;
-                    else
-                    {
-                        dots=dott;
-                        N=neg(r[i].n);
-                    }
+                else
+                {
+                    dots=dott;
+                    N=neg(r[i].n);
+                }
             }
         if (dots==ZERO)
         {
@@ -648,11 +648,11 @@ bool RayDirect(const Ray ray,const vec &dots)
     double st=ray.getT(dots);
     //枚举所有物体，求交点，判断是否在中间
     for (int i=0;i<shapetot;++i)
-            if (shapeLst[i]->intersect(ray,dott,2))
-            {
-                double tt=ray.getT(dott);
-                if (tt>eps&&tt+eps<=st)return true;
-            }
+        if (shapeLst[i]->intersect(ray,dott,2))
+        {
+            double tt=ray.getT(dott);
+            if (tt>eps&&tt+eps<=st)return true;
+        }
     return false;
 }
 
@@ -721,9 +721,9 @@ color RayTracing(const Ray ray,int dep)
             color iR=RayTracing(shapeLst[maxi]->reflection(ray, dots), dep+1);
             color iT=ZERO;
             if (shapeLst[maxi]->kT==ZERO)iT.set(0,0,0);
-                else iT=shapeLst[maxi]->insideRayTracing(
-                                                         refraction(ray.dir,dots,shapeLst[maxi]->getN(dots),1.0,shapeLst[maxi]->n),
-                                                         dep+1);
+            else iT=shapeLst[maxi]->insideRayTracing(
+                                                     refraction(ray.dir,dots,shapeLst[maxi]->getN(dots),1.0,shapeLst[maxi]->n),
+                                                     dep+1);
             return iL+mul(shapeLst[maxi]->kS,iR)+mul(shapeLst[maxi]->kT,iT);
         }
         else
@@ -782,9 +782,9 @@ int main(int argc, char * argv[])
     
     //球a，circle(球心vec,半径,kA,kD,kS,kT,折射率）
     circle a(vec(-10,10,0), 10.0, vec(0.05,0.45,0.1), vec(0.01,0.95,0.01),
-                                vec(0.3,0.63,0.3), vec(0.3,0.63,0.3), 1.33);
+             vec(0.3,0.63,0.3), vec(0.3,0.63,0.3), 1.33);
     circle b(vec(13,10,13),8.0,vec(0.45,0.01,0.01),vec(0.95,0.05,0.05),
-                                 vec(0.85,0.5,0.5),vec(0.7,0.3,0.3),1.33);
+             vec(0.85,0.5,0.5),vec(0.7,0.3,0.3),1.33);
     
     //长方体k cuboid(底面rectangle(四个顶点)，高度，折射率，kA,kD,kS,kT)
     cuboid k(rectangle(vec(5,10,-10),vec(15,0,-10),vec(25,10,-10),vec(15,20,-10)),
@@ -841,15 +841,15 @@ int main(int argc, char * argv[])
         {
             double sj=(double)(jj)/LEN;
             ans[ii][jj]=RayTracing(
-                                 mySpot.generateRay(si,sj),
-                                 1
-                                );
+                                   mySpot.generateRay(si,sj),
+                                   1
+                                   );
             ans[ii][jj].x=min(ans[ii][jj].x,255.0);
             ans[ii][jj].y=min(ans[ii][jj].y,255.0);
             ans[ii][jj].z=min(ans[ii][jj].z,255.0);
             /*maxx=max(ans[ii][jj].x,maxx);
-            maxy=max(ans[ii][jj].y,maxy);
-            maxz=max(ans[ii][jj].z,maxz);*/
+             maxy=max(ans[ii][jj].y,maxy);
+             maxz=max(ans[ii][jj].z,maxz);*/
         }
     }
     
@@ -863,6 +863,6 @@ int main(int argc, char * argv[])
     glutCreateWindow("RayTracing");
     glutDisplayFunc(&Display);
     glutMainLoop();/*
-     */
+                    */
     return 0;
 }
