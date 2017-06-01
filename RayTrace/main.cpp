@@ -4,13 +4,17 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
+#include <cstdio>
 #include <GLUT/glut.h>
 
 #define eps 1e-8
+#define inf -10000
 #define PI 3.1415926535898
 
 using namespace std;
 
+//faraway：定义最远处，如果光线延伸了这么远则停止追踪
+const double faraway=1e3;
 //PHONG_N：用于镜面反射
 const int PHONG_N=10;
 
@@ -20,20 +24,22 @@ const int maxdepth=8;
 //像平面的高和宽（这里是2048*2048)
 const int Len=2048;
 const double LEN=Len;
-const double units=1/LEN;
 
 //光线衰减函数的常数
-const double c1=0.5,c2=0.04,c3=0.0001;
+const double c1=0.5,c2=0.045,c3=0.0001;
 
 /*
  *  光线衰减函数，跟距离相关
  */
 double reduction(double d)
 {
+    if (d>faraway)return 0.001;
     return (min(1/(c1+c2*d+c3*d*d),0.95));
 }
 
 inline bool bige(double a,double b){if (a-b>-eps)return true;return false;}
+
+//如果a的绝对值在eps内则认为是0，精度误差控制
 inline bool Z(double a){if (a>-eps&&a<eps)return true;return false;}
 
 inline double sqr(double n){return n*n;}
@@ -90,7 +96,8 @@ struct vec
         return vec(a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x);
     }
     
-    friend inline vec unit(const vec &a){return vec(a.x/a.len,a.y/a.len,a.z/a.len);}
+    friend inline vec unit(const vec &a)
+    {if (Z(a.len))return vec(0,0,0,0,0);else return vec(a.x/a.len,a.y/a.len,a.z/a.len);}
     
     friend inline bool operator ==(const vec &a,const vec &b)
     {
@@ -109,6 +116,7 @@ struct vec
 
 //ZERO常量
 const vec ZERO(0,0,0,0,0);
+const vec INF(inf,inf,inf);
 
 typedef vec color;
 
@@ -146,13 +154,15 @@ struct Ray
  */
 Ray refraction(const vec &ray,const vec &dots,const vec &N,const double n1,const double n2)
 {
-    vec L=neg(ray);
+    vec L=unit(neg(ray));
     double cosL=dot(N,L);
+    vec NN=ZERO;
+    if (cosL<-eps)NN=unit(neg(N));else NN=unit(N);
     double sinL=1.0-cosL*cosL;
     double n=n1/n2;
     double ns=n*n;
-    if (sinL*ns>1.0)return Ray(ZERO,ZERO);
-    vec T=(n*cosL-sqrt(1-ns*sinL))*N-n*L;
+    if (sinL*ns+eps>=1.0)return Ray(ZERO,ZERO);
+    vec T=(n*cosL-sqrt(1-ns*sinL))*NN-n*L;
     return Ray(dots,unit(T));
 }
 
@@ -183,14 +193,14 @@ struct shape
     virtual Ray reflection(const Ray &ray,const vec &dot){return Ray();}
     
     /*
-     *  得到某处的法向量
+     *  得到某处的法向量，所有物体都要实现
      *  dots:物体上的指定位置
      *  返回值，该点的法向量
      */
     virtual vec getN(const vec &dots){return vec();}
     
     /*
-     * insiderRayTracing:
+     * 内部光线追踪，所有物体都要实现
      * 内部单独的光线追踪，区别在于没有环境光，加上不需要特地扫描所有物体求交
      * ray：光线
      * dep：追踪深度
@@ -199,10 +209,11 @@ struct shape
     virtual color insideRayTracing(const Ray&ray,int dep){return color();}
     
     /*
+     * 判定光线是否相交，所有物体都要实现
      * 判断某条光线是否与该物体相交，如果相交，根据num
      * num==1,求出最近交点放在dots里
      * num==2,求出第二近的交点放在dots里，如果只有一个交点，则把那个
-     * 交点放在dots里
+     * 交点放在dots里（为了判阴影所需）
      * 返回值：布尔，如果相交则为true，否则为false
      */
     virtual bool intersect(const Ray &ray,vec &dots,int num){return false;}
@@ -292,8 +303,12 @@ struct circle:public shape
         double s=2.0*dot(Dim,ray.dir);
         vec dots=ray.st+s*ray.dir;
         vec N=unit(dots-center);
-        color iR=insideRayTracing(insideReflection(ray,dots),dep+1);
-        color iT=RayTracing(refraction(ray.dir, dots, neg(N),n,1.0), dep+1);
+        color iR=ZERO;
+        if (dep<maxdepth)insideRayTracing(insideReflection(ray,dots),dep+1);
+        color iT=ZERO;
+        if (dep<maxdepth)RayTracing(refraction(ray.dir, dots, neg(N),n,1.0), dep+1);
+        //printvec(iR,"iR ");
+        //printvec(iT,"iT ");
         return mul(iR,kS)+mul(iT,kT);
     }
 };
@@ -324,9 +339,9 @@ struct plane:public shape
     bool intersect(const Ray &ray,vec &dots,int num)
     {
         double par=dot(ray.dir,n);
-        if (par==0)return false;
+        if (Z(par))return false;
         double t=(dis-dot(ray.st,n))/par;
-        if (t<eps)return false;
+        if (t<eps||t>faraway)return false;
         dots=ray.st+t*ray.dir;
         return true;
     }
@@ -346,8 +361,9 @@ struct rectangle
     vec a,b,c,d,n;
     double dis;
     rectangle(){}
-    rectangle(const vec& _a,const vec&_b,const vec&_c,const vec&_d):a(_a),b(_b),c(_c),d(_d)
+    rectangle(const vec& _a,const vec&_b,const vec&_c,const vec&_d)
     {
+        a=_a;b=_b;c=_c;d=_d;
         n=unit(det(a-b,c-b));
         dis=dot(a,n);
     }
@@ -359,13 +375,30 @@ struct rectangle
         dis=dot(a,n);
     }
     
+    //d是否在三角形abc中，其中在bc上也算
+    inline bool Init(const vec &a,const vec &b,const vec &c,const vec &d)
+    {
+        vec P=d-a;
+        vec P1=b-a;
+        vec P2=c-a;
+        double A=P1.slen;
+        double B=dot(P1,P2);
+        double C=P2.slen;
+        double D1=dot(P,P1);
+        double D2=dot(P,P2);
+        double s=A*C-B*B;
+        double u=(D1*C-D2*B)/s;
+        double v=(D2*A-D1*B)/s;
+        if (u>0.0&&u+eps<1.0&&v>0.0&&v+eps<1.0&&u+v+eps<1.0)return true;
+        return false;
+    }
     //判断某个点dots是否在该四边形内部
     //如果是返回true,否则返回false
     //点在边ab,bc上也认为是在内部
     //但点在ad,cd上则不认为在内部
+    //注意：该函数已经确定了该点在四边形平面上
     bool inIt(const vec &dots)
     {
-        double ra=0.0;
         vec at=unit(a-dots);
         vec bt=unit(b-dots);
         vec ct=unit(c-dots);
@@ -374,18 +407,9 @@ struct rectangle
         if (neg(bt)==ct)return true;
         if (neg(ct)==dt)return false;
         if (neg(dt)==at)return false;
-        double ab=dot(at,bt);
-        double bc=dot(bt,ct);
-        double cd=dot(ct,dt);
-        double da=dot(dt,at);
-        ra+=acos(ab);
-        ra+=acos(bc);
-        ra+=acos(cd);
-        ra+=acos(da);
-        if (Z(ra-2.0*PI))
-            return true;
-        else
-            return false;
+        if (Init(a,b,d,dots))return true;
+        if (Init(c,d,b,dots))return true;
+        return false;
     }
     
     //判断某条光线ray是否和该四边形相交
@@ -394,9 +418,13 @@ struct rectangle
     bool intersect(const Ray &ray,vec &dots)
     {
         double par=dot(ray.dir,n);
-        if (par==0)return false;
+        //printvec(ray.st,"intersect st ");
+        //printvec(ray.dir,"intersect dir ");
+        //cout<<"par "<<par<<endl;
+        if (Z(par))return false;
         double t=(dis-dot(ray.st,n))/par;
-        if (t<eps)return false;
+        //cout<<"t "<<t<<endl;
+        if (t<eps||t>faraway)return false;
         vec dott=ray.st+t*ray.dir;
         if (inIt(dott))
         {
@@ -430,6 +458,7 @@ struct cuboid:public shape
         r[3]=rectangle(bn,bu,cu,cn);
         r[4]=rectangle(dn,cn,cu,du);
         r[5]=rectangle(an,dn,du,au);
+        //print();
     }
     
     void print()
@@ -440,6 +469,7 @@ struct cuboid:public shape
             printvec(r[i].b,"b ");
             printvec(r[i].c,"c ");
             printvec(r[i].d,"d ");
+            printvec(r[i].n,"n ");
             putchar('\n');
         }
     }
@@ -447,8 +477,12 @@ struct cuboid:public shape
     vec getN(const vec &dots)
     {
         for (int i=0;i<6;++i)
-            if (r[i].inIt(dots))
-                return r[i].n;
+        {
+            double dis=dot(r[i].n,dots);
+            if (Z(dis-r[i].dis))
+                if (r[i].inIt(dots))
+                    return r[i].n;
+        }
         return ZERO;
     }
     
@@ -459,66 +493,50 @@ struct cuboid:public shape
     
     bool intersect(const Ray &ray,vec &dots,int num)
     {
-        double t[2];
-        int tot=0;
+        double t[7];
+        int tots=0;
         vec dott=ZERO;
         for (int i=0;i<6;++i)
             if (r[i].intersect(ray, dott))
             {
-                t[tot]=ray.getT(dott);
-                tot++;
+                t[tots]=ray.getT(dott);
+                tots++;
             }
-        if (tot==0)return false;
+        if (tots==0)return false;
+        sort(t,t+tots);
+        int ind=0;
+        while (ind<tots&&t[ind]<eps)ind++;
+        if (ind==tots)return false;
         if (num==1)
         {
-            if (tot==1)
-            {
-                dots=ray.st+t[0]*ray.dir;
-                return true;
-            }
-            else
-            {
-                if (t[0]+eps<t[1])
-                {
-                    dots=ray.st+t[0]*ray.dir;
-                    return true;
-                }
-                else
-                {
-                    dots=ray.st+t[1]*ray.dir;
-                    return true;
-                }
-            }
+            dots=ray.st+t[ind]*ray.dir;
+            return true;
         }
         if (num==2)
         {
-            if (tot==1)
-            {
-                dots=ray.st+t[0]*ray.dir;
-                return true;
-            }
+            if (ind==tots-1)
+                dots=ray.st+t[ind]*ray.dir;
             else
-            {
-                if (t[0]+eps<t[1])
-                {
-                    dots=ray.st+t[1]*ray.dir;
-                    return true;
-                }
-                else
-                {
-                    dots=ray.st+t[0]*ray.dir;
-                    return true;
-                }
-            }
+                dots=ray.st+t[ind+1]*ray.dir;
+            return true;
         }
         return false;
+    }
+    
+    Ray insideReflection(const Ray &ray,const vec &dots,const vec &N)
+    {
+        return Ray(dots,ray.dir+(-2.0*dot(N,ray.dir)*N));
     }
     
     Ray reflection(const Ray &ray,const vec &dots)
     {
         for (int i=0;i<6;++i)
-            if (r[i].inIt(dots))
-                return Ray(dots,ray.dir+(-2.0*dot(r[i].n,ray.dir))*r[i].n);
+        {
+            double dis=dot(dots,r[i].n);
+            if (Z(r[i].dis-dis))
+                if (r[i].inIt(dots))
+                    return Ray(dots,ray.dir+(-2.0*dot(r[i].n,ray.dir))*r[i].n);
+        }
         return Ray(ZERO,ZERO);
     }
     
@@ -526,20 +544,36 @@ struct cuboid:public shape
     {
         if (dep>maxdepth)return ZERO;
         if (ray.dir==ZERO)return ZERO;
-        vec dots,dott,N;
+        //cout<<dep<<endl;
+        //printvec(ray.st,"1 st ");
+        //printvec(ray.dir,"1 dir ");
+        vec dots=ZERO,dott,N;
         for (int i=0;i<6;++i)
             if (r[i].intersect(ray, dott))
             {
                 double t=ray.getT(dott);
+                //cout<<"t "<<t<<endl;
                 if (t<eps)continue;
                     else
                     {
                         dots=dott;
-                        N=r[i].n;
+                        N=neg(r[i].n);
                     }
             }
-        color iR=insideRayTracing(reflection(ray, dots), dep+1);
-        color iT=RayTracing(refraction(ray.dir, dots, neg(N), n, 1.0),dep+1);
+        if (dots==ZERO)
+        {
+            //getchar();
+            return RayTracing(ray, dep);
+        }
+        color iR=ZERO;
+        if (dep<maxdepth)iR=insideRayTracing(insideReflection(ray, dots, N), dep+1);
+        color iT=ZERO;
+        if (dep<maxdepth)
+            iT=RayTracing(refraction(ray.dir, dots, N, n, 1.0),dep+1);
+        //printvec(ray.st,"st ");
+        //printvec(ray.dir,"dir ");
+        //printvec(iR,"iR ");
+        //printvec(iT,"iT ");
         return mul(iR,kS)+mul(iT,kT);
     }
 };
@@ -626,6 +660,7 @@ bool RayDirect(const Ray ray,const vec &dots)
 color RayTracing(const Ray ray,int dep)
 {
     if (ray.dir==ZERO)return ZERO;
+    if (dep>maxdepth)return ZERO;
     bool find=false;
     vec dots;
     vec dott;
@@ -645,7 +680,7 @@ color RayTracing(const Ray ray,int dep)
             else
             {
                 double t=ray.getT(dott);
-                if (t+eps<maxt)
+                if (t+eps<faraway&&t+eps<maxt)
                 {
                     maxt=t;
                     maxi=i;
@@ -684,7 +719,7 @@ color RayTracing(const Ray ray,int dep)
         if (dep<maxdepth)
         {
             color iR=RayTracing(shapeLst[maxi]->reflection(ray, dots), dep+1);
-            color iT;
+            color iT=ZERO;
             if (shapeLst[maxi]->kT==ZERO)iT.set(0,0,0);
                 else iT=shapeLst[maxi]->insideRayTracing(
                                                          refraction(ray.dir,dots,shapeLst[maxi]->getN(dots),1.0,shapeLst[maxi]->n),
@@ -700,6 +735,18 @@ color RayTracing(const Ray ray,int dep)
 
 vec ans[Len][Len];
 
+void readAns()
+{
+    freopen("output.txt","r",stdin);
+    for (int i=0;i<Len;++i)
+    {
+        for (int j=0;j<Len;++j)
+            scanf("%lf %lf %lf ",&ans[i][j].x,&ans[i][j].y,&ans[i][j].z);
+    }
+    fclose(stdin);
+}
+
+double maxx,maxy,maxz;
 //画图
 void Display()
 {
@@ -714,9 +761,9 @@ void Display()
     for (int i=0;i<Len;++i)
         for (int j=0;j<Len;++j)
         {
-            glColor3d((double)ans[i][j].x/(double)255.0,
-                      (double)ans[i][j].y/(double)255.0,
-                      (double)ans[i][j].z/(double)255.0);
+            glColor3d((double)ans[i][j].x/(double)maxx,
+                      (double)ans[i][j].y/(double)maxy,
+                      (double)ans[i][j].z/(double)maxz);
             glVertex2d((double)i*2.0/LEN-1, (double)j*2.0/LEN-1);
         }
     glEnd();
@@ -726,11 +773,20 @@ void Display()
 
 int main(int argc, char * argv[])
 {
-    mySpot.set(vec(25,-13,5),unit(vec(-1.0,1.0,0.0)),vec(0,0,1),90.0);
+    //(-1,1,0) may be problem?
+    //摄影机视角 camera(位置vec，正前方vec，粗略的确定正上方的vec，视角大小（角度多少度）)
+    //mySpot.set(vec(80,25,5),unit(vec(-1.0,0.0,0.0)),vec(0,0,1),90.0);
+    
+    mySpot.set(vec(6,-25,0),unit(vec(0,1,0)),vec(0,0,1),90.0);
+    //mySpot.set(vec(5,-35,10),unit(vec(0,1.0,0.0)),vec(0,0,1),90.0);
+    
+    //球a，circle(球心vec,半径,kA,kD,kS,kT,折射率）
     circle a(vec(-10,10,0), 10.0, vec(0.05,0.45,0.1), vec(0.01,0.95,0.01),
                                 vec(0.3,0.63,0.3), vec(0.3,0.63,0.3), 1.33);
     circle b(vec(13,10,13),8.0,vec(0.45,0.01,0.01),vec(0.95,0.05,0.05),
                                  vec(0.85,0.5,0.5),vec(0.7,0.3,0.3),1.33);
+    
+    //长方体k cuboid(底面rectangle(四个顶点)，高度，折射率，kA,kD,kS,kT)
     cuboid k(rectangle(vec(5,10,-10),vec(15,0,-10),vec(25,10,-10),vec(15,20,-10)),
              vec(0,0,1),
              15.0,1.33,
@@ -738,28 +794,46 @@ int main(int argc, char * argv[])
     circle e(vec(0,38,10),20.0,vec(0.05,0.05,0.45),vec(0.05,0.05,1.0),vec(0.3,0.3,0.63),vec(0.3,0.3,0.73),1.33);
     circle j(vec(0,-3,-5.0),5.0,vec(0.0,0.0,0.0),vec(0.00,0.00,0.00),vec(0.5,0.5,0.5),
              vec(0.5,0.5,0.5),1.33);
+    
     cuboid l(rectangle(vec(-10,38,-10),vec(10,18,-10),vec(30,38,-10),vec(10,58,-10)),
              vec(0,0,1),
              40.0,1.2,
              vec(0.25,0.75,0.75),vec(0.2,0.75,0.75),vec(0.2,0.5,0.5),vec(0.07,0.7,0.7));
-    plane d(vec(0,0,1),-10.1,vec(0.6,0.6,0.6),vec(0.5,0.5,0.5),vec(0.5,0.5,0.5),vec(0,0,0));
+    //放在xy平面以下10.5单位的平面（底部墙壁）
+    plane d(vec(0,0,1),-10.5,vec(0.6,0.6,0.6),vec(0.5,0.5,0.5),vec(0.5,0.5,0.5),vec(0,0,0));
+    //放在xz平面向后60单位的平面（红色）（前部墙壁）
     plane f(vec(0,-1,0),-60.0,vec(0.3,0.3,0.3),vec(0.6,0.0,0.0),vec(0.0,0.0,0.0),vec(0,0,0));
+    //放在yz平面向左20.5cm的平面（左墙壁）
     plane g(vec(1,0,0),-20.5,vec(0.1,0.1,0.1),vec(0.2,0.2,0.2),vec(0.5,0.5,0.5),vec(0,0,0));
+    
+    //三个光源 light(位置vec,光的颜色vec)
     light c(vec(10,5,25),vec(255,255,255));
     light h(vec(-10,15,25),vec(255,255,255));
     light i(vec(0,30,40),vec(255,255,255));
+    light m(vec(28,10,45),vec(255,255,255));
+    //将需要绘制的物体加入到shapeLst指针数组即可
     shapeLst[shapetot++]=&a;
     shapeLst[shapetot++]=&b;
     //shapeLst[shapetot++]=&e;
-    //shapeLst[shapetot++]=&j;
+    shapeLst[shapetot++]=&j;
     shapeLst[shapetot++]=&k;
     shapeLst[shapetot++]=&l;
     shapeLst[shapetot++]=&d;
     shapeLst[shapetot++]=&f;
     shapeLst[shapetot++]=&g;
+    
+    //将需要的光源加入到lightLst指针数组即可
     lightLst[lighttot++]=&c;
     lightLst[lighttot++]=&h;
-    //lightLst[lighttot++]=&i;
+    lightLst[lighttot++]=&i;
+    lightLst[lighttot++]=&m;
+    
+    //枚举像素，由camera产生追踪光线
+    //maxx=maxy=maxz=0.0;
+    maxx=maxy=maxz=255.0;
+    //color cs=shapeLst[2]->insideRayTracing(Ray(vec(16.5394,1.53944,-9.63859),vec(-0.853694,0.502995,-0.134916)),7);
+    //printvec(cs," ");
+    //return 0;
     for (int ii=0;ii<Len;++ii)
     {
         double si=(double)(ii)/LEN;
@@ -773,13 +847,20 @@ int main(int argc, char * argv[])
             ans[ii][jj].x=min(ans[ii][jj].x,255.0);
             ans[ii][jj].y=min(ans[ii][jj].y,255.0);
             ans[ii][jj].z=min(ans[ii][jj].z,255.0);
+            /*maxx=max(ans[ii][jj].x,maxx);
+            maxy=max(ans[ii][jj].y,maxy);
+            maxz=max(ans[ii][jj].z,maxz);*/
         }
     }
+    
+    //将结果打印到output.txt里面，方便以后直接输出
+    //printAns();*/
+    //readAns();
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_RGB);
     glutInitWindowPosition(200, 200);
     glutInitWindowSize(700, 700);
-    glutCreateWindow("???");
+    glutCreateWindow("RayTracing");
     glutDisplayFunc(&Display);
     glutMainLoop();/*
      */
